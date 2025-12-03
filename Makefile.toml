@@ -1,0 +1,46 @@
+[tasks.fmt]
+description = "Format the codebase"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.fmt-fix]
+description = "Format the codebase (fix)"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.clippy]
+description = "Run clippy linter"
+command = "cargo"
+args = ["clippy", "--all-targets", "--", "-D", "warnings"]
+
+[tasks.clippy-fix]
+description = "Run clippy linter (with auto-fix)"
+command = "cargo"
+args = ["clippy", "--all-targets", "--fix", "--", "-D", "warnings"]
+
+[tasks.test]
+description = "Run tests"
+command = "cargo"
+args = ["test", "--all-targets"]
+
+[tasks.build]
+description = "Build the project"
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.check]
+description = "Check the project without building"
+command = "cargo"
+args = ["check", "--all-targets"]
+
+[tasks.lint]
+description = "Run all linters (fmt + clippy)"
+dependencies = ["fmt", "clippy"]
+
+[tasks.ci]
+description = "Run CI checks (fmt, clippy, test)"
+dependencies = ["fmt", "clippy", "test"]
+
+[tasks.all]
+description = "Run all checks and build"
+dependencies = ["ci", "build"]

@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Release ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive-name: changelogger-x86_64-unknown-linux-gnu.tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive-name: changelogger-x86_64-unknown-linux-musl.tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive-name: changelogger-x86_64-apple-darwin.tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive-name: changelogger-aarch64-apple-darwin.tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive-name: changelogger-x86_64-pc-windows-msvc.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt, clippy
+
+      - name: Install musl target (Linux)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            cargo build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Prepare archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/changelogger${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }} release/
+          tar czf ${{ matrix.archive-name }} -C release changelogger
+
+      - name: Prepare archive (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir release
+          copy target\${{ matrix.target }}\release\changelogger.exe release\
+          cd release
+          tar czf ..\${{ matrix.archive-name }} changelogger.exe
+          cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive-name }}
+          path: ${{ matrix.archive-name }}
+
+  create-release:
+    name: Create Release
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          name: Release v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## Changelogger v${{ steps.get_version.outputs.VERSION }}
+
+            ### Downloads
+
+            - **Linux (GNU)**: `changelogger-x86_64-unknown-linux-gnu.tar.gz`
+            - **Linux (musl)**: `changelogger-x86_64-unknown-linux-musl.tar.gz`
+            - **macOS (Intel)**: `changelogger-x86_64-apple-darwin.tar.gz`
+            - **macOS (Apple Silicon)**: `changelogger-aarch64-apple-darwin.tar.gz`
+            - **Windows**: `changelogger-x86_64-pc-windows-msvc.zip`
+
+            ### Installation
+
+            Extract the archive and place the `changelogger` binary in your PATH.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
