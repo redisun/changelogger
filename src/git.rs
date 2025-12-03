@@ -164,27 +164,23 @@ pub fn commits_since(repo: &Repository, since: Option<Oid>) -> Result<Vec<Commit
     Ok(commits)
 }
 
-/// Extracts remote repository information from the "origin" remote.
+/// Parses a git remote URL and converts it to a base URL.
 ///
-/// Parses the remote URL and converts it to a base URL suitable for generating
-/// links to commits, issues, and releases. Supports both SSH (git@) and HTTPS URLs.
+/// Supports both SSH (git@) and HTTPS URLs. Converts SSH URLs to HTTPS format.
 ///
 /// # Arguments
 ///
-/// * `repo` - The git repository
+/// * `url` - The remote URL (e.g., "git@github.com:user/repo.git" or "https://github.com/user/repo.git")
 ///
 /// # Returns
 ///
-/// Returns `Some(RemoteInfo)` if the origin remote exists and has a parseable URL,
-/// or `None` otherwise.
-pub fn get_remote_info(repo: &Repository) -> Option<RemoteInfo> {
-    let remote = repo.find_remote("origin").ok()?;
-    let url = remote.url()?;
-
+/// Returns `Some(RemoteInfo)` if the URL can be parsed, or `None` otherwise.
+pub(crate) fn parse_remote_url(url: &str) -> Option<RemoteInfo> {
     if url.starts_with("git@") {
         if let Some((host_part, path_part)) = url.split_once(':') {
             let host = host_part.strip_prefix("git@").unwrap_or(host_part);
-            let path = path_part.trim_end_matches(".git").trim_end_matches('/');
+            // Trim trailing slash first, then .git extension
+            let path = path_part.trim_end_matches('/').trim_end_matches(".git");
             return Some(RemoteInfo {
                 base_url: format!("https://{host}/{path}/"),
             });
@@ -202,4 +198,106 @@ pub fn get_remote_info(repo: &Repository) -> Option<RemoteInfo> {
     }
 
     None
+}
+
+/// Extracts remote repository information from the "origin" remote.
+///
+/// Parses the remote URL and converts it to a base URL suitable for generating
+/// links to commits, issues, and releases. Supports both SSH (git@) and HTTPS URLs.
+///
+/// # Arguments
+///
+/// * `repo` - The git repository
+///
+/// # Returns
+///
+/// Returns `Some(RemoteInfo)` if the origin remote exists and has a parseable URL,
+/// or `None` otherwise.
+pub fn get_remote_info(repo: &Repository) -> Option<RemoteInfo> {
+    let remote = repo.find_remote("origin").ok()?;
+    let url = remote.url()?;
+    parse_remote_url(url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_remote_url_https() {
+        let result = parse_remote_url("https://github.com/user/repo.git");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_https_with_slash() {
+        let result = parse_remote_url("https://github.com/user/repo/");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_https_no_git() {
+        let result = parse_remote_url("https://github.com/user/repo");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh() {
+        let result = parse_remote_url("git@github.com:user/repo.git");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh_no_git() {
+        let result = parse_remote_url("git@github.com:user/repo");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh_with_trailing_slash() {
+        let result = parse_remote_url("git@github.com:user/repo.git/");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://github.com/user/repo/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_ssh_custom_host() {
+        let result = parse_remote_url("git@gitlab.com:group/project.git");
+        assert_eq!(
+            result.map(|r| r.base_url),
+            Some("https://gitlab.com/group/project/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_remote_url_invalid() {
+        assert!(parse_remote_url("not a url").is_none());
+        assert!(parse_remote_url("http://github.com/user/repo").is_none());
+        assert!(parse_remote_url("").is_none());
+    }
+
+    #[test]
+    fn test_parse_remote_url_https_with_port() {
+        // Note: This might not work with current implementation, but let's test it
+        let result = parse_remote_url("https://github.com:443/user/repo.git");
+        // Current implementation should handle this
+        assert!(result.is_some());
+    }
 }

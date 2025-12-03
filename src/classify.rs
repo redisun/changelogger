@@ -118,26 +118,169 @@ pub fn auto_classify(commit: &mut CommitInfo) -> Option<CommitCategory> {
 
     // type: subject
     // or type(scope): subject
-    static RE: once_cell::sync::Lazy<Regex> =
-        once_cell::sync::Lazy::new(|| Regex::new(r"^([^:]+):\s+").unwrap());
+    // Check scoped format first to avoid matching it with the simple format
     static RE_SCOPE: once_cell::sync::Lazy<Regex> =
         once_cell::sync::Lazy::new(|| Regex::new(r"^([^(]+)\([^)]+\):\s+").unwrap());
+    static RE: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"^([^:]+):\s+").unwrap());
 
-    if let Some(cap) = RE.captures(&commit.summary) {
-        if let Some(ty) = cap.get(1) {
-            if let Some(cat) = prefix_mapping(ty.as_str()) {
-                commit.summary = RE.replace(&commit.summary, "").into_owned();
-                return Some(cat);
-            }
-        }
-    } else if let Some(cap) = RE_SCOPE.captures(&commit.summary) {
+    if let Some(cap) = RE_SCOPE.captures(&commit.summary) {
         if let Some(ty) = cap.get(1) {
             if let Some(cat) = prefix_mapping(ty.as_str()) {
                 commit.summary = RE_SCOPE.replace(&commit.summary, "").into_owned();
                 return Some(cat);
             }
         }
+    } else if let Some(cap) = RE.captures(&commit.summary) {
+        if let Some(ty) = cap.get(1) {
+            if let Some(cat) = prefix_mapping(ty.as_str()) {
+                commit.summary = RE.replace(&commit.summary, "").into_owned();
+                return Some(cat);
+            }
+        }
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::Oid;
+
+    fn create_commit_info(summary: &str) -> CommitInfo {
+        CommitInfo {
+            oid: Oid::zero(),
+            short_id: "abc1234".to_string(),
+            summary: summary.to_string(),
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_is_release_message() {
+        assert_eq!(
+            is_release_message("-> v1.2.3"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
+        assert_eq!(
+            is_release_message("-> 1.2.3"),
+            Some(Version::parse("1.2.3").unwrap())
+        );
+        assert_eq!(
+            is_release_message("-> v0.1.0"),
+            Some(Version::parse("0.1.0").unwrap())
+        );
+        assert_eq!(is_release_message("-> invalid"), None);
+        assert_eq!(is_release_message("not a release"), None);
+        assert_eq!(is_release_message("->"), None);
+    }
+
+    #[test]
+    fn test_auto_classify_release_message() {
+        let mut commit = create_commit_info("-> v1.2.3");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+    }
+
+    #[test]
+    fn test_auto_classify_tweak() {
+        let mut commit = create_commit_info("tweak");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+        assert_eq!(commit.summary, "tweak");
+
+        let mut commit = create_commit_info("Tweaks");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+    }
+
+    #[test]
+    fn test_auto_classify_conventional_commits() {
+        // Major
+        let mut commit = create_commit_info("breaking: remove deprecated API");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Major));
+        assert_eq!(commit.summary, "remove deprecated API");
+
+        let mut commit = create_commit_info("major: breaking change");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Major));
+
+        // Minor
+        let mut commit = create_commit_info("feat: add new feature");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Minor));
+        assert_eq!(commit.summary, "add new feature");
+
+        let mut commit = create_commit_info("minor: add something");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Minor));
+
+        // Patch
+        let mut commit = create_commit_info("fix: resolve bug");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+        assert_eq!(commit.summary, "resolve bug");
+
+        let mut commit = create_commit_info("perf: improve performance");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+
+        let mut commit = create_commit_info("refactor: clean up code");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+
+        // Ignore
+        let mut commit = create_commit_info("docs: update README");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+        assert_eq!(commit.summary, "update README");
+
+        let mut commit = create_commit_info("style: format code");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+
+        let mut commit = create_commit_info("chore: update dependencies");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+
+        let mut commit = create_commit_info("test: add unit tests");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+    }
+
+    #[test]
+    fn test_auto_classify_with_scope() {
+        let mut commit = create_commit_info("feat(api): add new endpoint");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Minor));
+        assert_eq!(commit.summary, "add new endpoint");
+
+        let mut commit = create_commit_info("fix(parser): handle edge case");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+        assert_eq!(commit.summary, "handle edge case");
+
+        let mut commit = create_commit_info("breaking(api): remove old method");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Major));
+        assert_eq!(commit.summary, "remove old method");
+    }
+
+    #[test]
+    fn test_auto_classify_case_insensitive() {
+        let mut commit = create_commit_info("FEAT: uppercase");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Minor));
+
+        let mut commit = create_commit_info("Fix: mixed case");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+
+        let mut commit = create_commit_info("DOCS: documentation");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Ignore));
+    }
+
+    #[test]
+    fn test_auto_classify_unknown_prefix() {
+        let mut commit = create_commit_info("unknown: something");
+        assert_eq!(auto_classify(&mut commit), None);
+        assert_eq!(commit.summary, "unknown: something");
+    }
+
+    #[test]
+    fn test_auto_classify_no_prefix() {
+        let mut commit = create_commit_info("just a regular commit message");
+        assert_eq!(auto_classify(&mut commit), None);
+        assert_eq!(commit.summary, "just a regular commit message");
+    }
+
+    #[test]
+    fn test_auto_classify_multiple_colons() {
+        let mut commit = create_commit_info("fix: handle error: invalid input");
+        assert_eq!(auto_classify(&mut commit), Some(CommitCategory::Patch));
+        assert_eq!(commit.summary, "handle error: invalid input");
+    }
 }

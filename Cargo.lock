@@ -125,6 +125,7 @@ dependencies = [
  "owo-colors",
  "regex",
  "semver",
+ "tempfile",
 ]
 
 [[package]]

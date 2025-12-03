@@ -185,3 +185,209 @@ pub fn write_changelog(path: &str, new_section: &str) -> Result<()> {
     fs::write(p, content)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::Oid;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    fn create_commit_info(short_id: &str, summary: &str) -> CommitInfo {
+        CommitInfo {
+            oid: Oid::zero(),
+            short_id: short_id.to_string(),
+            summary: summary.to_string(),
+            body: String::new(),
+        }
+    }
+
+    fn create_remote_info(base_url: &str) -> RemoteInfo {
+        RemoteInfo {
+            base_url: base_url.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_build_release_section_no_remote() {
+        let new_version = Version::parse("1.2.3").unwrap();
+        let last_version = Version::parse("1.2.2").unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
+        let mut grouped = HashMap::new();
+
+        grouped.insert(
+            CommitCategory::Patch,
+            vec![create_commit_info("abc1234", "fix: bug fix")],
+        );
+
+        let result = build_release_section(&new_version, &last_version, date, None, &grouped);
+
+        assert!(result.contains("## Version 1.2.3 (2024-01-15)"));
+        assert!(result.contains("### Bug fixes"));
+        assert!(result.contains("* fix: bug fix:"));
+        assert!(result.contains("`abc1234`"));
+    }
+
+    #[test]
+    fn test_build_release_section_with_remote() {
+        let new_version = Version::parse("2.0.0").unwrap();
+        let last_version = Version::parse("1.9.9").unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 2, 20).unwrap();
+        let remote = create_remote_info("https://github.com/user/repo/");
+        let mut grouped = HashMap::new();
+
+        grouped.insert(
+            CommitCategory::Major,
+            vec![create_commit_info("def5678", "breaking: remove old API")],
+        );
+
+        let result =
+            build_release_section(&new_version, &last_version, date, Some(&remote), &grouped);
+
+        assert!(
+            result.contains("## [Version 2.0.0](https://github.com/user/repo/releases/tag/v2.0.0)")
+        );
+        assert!(result.contains("### Breaking changes"));
+        assert!(result.contains("[`def5678`](https://github.com/user/repo/commit/def5678)"));
+        assert!(result
+            .contains("[...full changes](https://github.com/user/repo/compare/v1.9.9...v2.0.0)"));
+    }
+
+    #[test]
+    fn test_build_release_section_all_categories() {
+        let new_version = Version::parse("1.5.0").unwrap();
+        let last_version = Version::parse("1.4.0").unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 3, 10).unwrap();
+        let mut grouped = HashMap::new();
+
+        grouped.insert(
+            CommitCategory::Major,
+            vec![create_commit_info("maj1", "breaking: change")],
+        );
+        grouped.insert(
+            CommitCategory::Minor,
+            vec![create_commit_info("min1", "feat: new feature")],
+        );
+        grouped.insert(
+            CommitCategory::Patch,
+            vec![create_commit_info("pat1", "fix: bug")],
+        );
+
+        let result = build_release_section(&new_version, &last_version, date, None, &grouped);
+
+        assert!(result.contains("### Breaking changes"));
+        assert!(result.contains("### New features"));
+        assert!(result.contains("### Bug fixes"));
+        assert!(result.contains("breaking: change"));
+        assert!(result.contains("feat: new feature"));
+        assert!(result.contains("fix: bug"));
+    }
+
+    #[test]
+    fn test_build_release_section_initial_version() {
+        let new_version = Version::parse("1.0.0").unwrap();
+        let last_version = Version::parse("0.0.0").unwrap();
+        let date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let remote = create_remote_info("https://github.com/user/repo/");
+        let mut grouped = HashMap::new();
+
+        grouped.insert(
+            CommitCategory::Minor,
+            vec![create_commit_info("init1", "feat: initial release")],
+        );
+
+        let result =
+            build_release_section(&new_version, &last_version, date, Some(&remote), &grouped);
+
+        // Should not include compare link for 0.0.0
+        assert!(!result.contains("compare/v0.0.0"));
+    }
+
+    #[test]
+    fn test_format_section_with_issue_references() {
+        let remote = create_remote_info("https://github.com/user/repo/");
+        let commits = vec![
+            create_commit_info("abc123", "fix: bug (#42)"),
+            create_commit_info("def456", "feat: feature (#123)"),
+            create_commit_info("ghi789", "fix: another bug"),
+        ];
+
+        let result = format_section("Bug fixes", &commits, Some(&remote));
+
+        assert!(result.contains("### Bug fixes"));
+        assert!(result.contains("fix: bug:"));
+        assert!(result.contains("([#42](https://github.com/user/repo/issues/42))"));
+        assert!(result.contains("([#123](https://github.com/user/repo/issues/123))"));
+        assert!(result.contains("fix: another bug:"));
+        assert!(!result.contains("(#"));
+    }
+
+    #[test]
+    fn test_format_section_squashed_issue_format() {
+        let remote = create_remote_info("https://github.com/user/repo/");
+        let commits = vec![create_commit_info("abc123", "fix: bug (#99)")];
+
+        let result = format_section("Bug fixes", &commits, Some(&remote));
+
+        assert!(result.contains("fix: bug:"));
+        assert!(result.contains("([#99](https://github.com/user/repo/issues/99))"));
+    }
+
+    #[test]
+    fn test_format_section_no_remote() {
+        let commits = vec![
+            create_commit_info("abc123", "fix: bug (#42)"),
+            create_commit_info("def456", "feat: feature"),
+        ];
+
+        let result = format_section("Changes", &commits, None);
+
+        assert!(result.contains("### Changes"));
+        assert!(result.contains("fix: bug:"));
+        assert!(result.contains("(#42)")); // Issue number without link
+        assert!(result.contains("`abc123`")); // Commit hash without link
+        assert!(result.contains("feat: feature:"));
+    }
+
+    #[test]
+    fn test_write_changelog_new_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("CHANGELOG.md");
+        let section = "## Version 1.0.0 (2024-01-01)\n\n### Bug fixes\n* fix: bug\n\n";
+
+        write_changelog(file_path.to_str().unwrap(), section).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains(section));
+        assert!(content.contains("--- Generated by changelogger"));
+    }
+
+    #[test]
+    fn test_write_changelog_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("CHANGELOG.md");
+        let existing = "## Version 0.9.0 (2023-12-01)\n\n### Bug fixes\n* old fix\n\n";
+        fs::write(&file_path, existing).unwrap();
+
+        let new_section = "## Version 1.0.0 (2024-01-01)\n\n### Bug fixes\n* new fix\n\n";
+        write_changelog(file_path.to_str().unwrap(), new_section).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(content.starts_with(new_section.trim()));
+        assert!(content.contains(existing.trim()));
+    }
+
+    #[test]
+    fn test_write_changelog_empty_existing_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("CHANGELOG.md");
+        fs::write(&file_path, "   \n\n  ").unwrap(); // Whitespace only
+
+        let section = "## Version 1.0.0 (2024-01-01)\n\n### Bug fixes\n* fix\n\n";
+        write_changelog(file_path.to_str().unwrap(), section).unwrap();
+
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains(section));
+        assert!(content.contains("--- Generated by changelogger"));
+    }
+}
