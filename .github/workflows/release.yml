@@ -40,18 +40,17 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt, clippy
+          targets: ${{ matrix.target }}
 
-      - name: Install musl target (Linux)
+      - name: Install musl tools and dependencies (Linux musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: rustup target add x86_64-unknown-linux-musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
 
       - name: Build
-        run: |
-          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
-            cargo build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare archive (Unix)
         if: runner.os != 'Windows'
