@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-git2 = "0.20.2"
+git2 = { version = "0.20.2", features = ["vendored-libgit2", "vendored-openssl"] }
 chrono = { version = "0.4", features = ["clock"] }
 semver = "1.0"
 regex = "1"

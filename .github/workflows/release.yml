@@ -42,11 +42,15 @@ jobs:
           components: rustfmt, clippy
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools and dependencies (Linux musl)
+      - name: Install musl tools (Linux musl)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools musl-dev
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
       - name: Build
         shell: bash
@@ -56,17 +60,16 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/changelogger${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }} release/
+          cp target/${{ matrix.target }}/release/changelogger release/
           tar czf ${{ matrix.archive-name }} -C release changelogger
 
       - name: Prepare archive (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           mkdir release
           copy target\${{ matrix.target }}\release\changelogger.exe release\
-          cd release
-          tar czf ..\${{ matrix.archive-name }} changelogger.exe
-          cd ..
+          Compress-Archive -Path release\changelogger.exe -DestinationPath ${{ matrix.archive-name }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
